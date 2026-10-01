@@ -77,6 +77,7 @@ const COMBO_WINDOW    = 0.7;    // eat again within this to keep a combo going
 const CLEAR_BONUS     = 0.5;    // bonus bottles per second left when the block is clear
 const CLEAR_PAUSE     = 1.8;    // a moment to enjoy it before night falls
 const BIG_QUACK_R     = 170;
+const SPLIT_HINT_AFTER = 20;    // nudge players who haven't split yet
 const PUDDLE_SECS     = 20;
 const PUDDLE_SPAWN    = 0.35;   // per second while it rains
 const BLOCK_BOTTLES   = 150;    // a perfect block
@@ -235,7 +236,7 @@ let grid = [], vines = [], edges = [], tufts = [], rows = [];
 let snails = [], puddles = [], patrols = [], floaters = [];
 let leader, line, player;       // player = { head: leader, ducks: line, trail }
 let upgrades = { ducklings: 0, bigquack: 0, hose: 0, brisk: 0 };
-let season = { eaten: 0, bottles: 0, stuck: 0, blocks: [], bestCombo: 0 };
+let season = { eaten: 0, bottles: 0, stuck: 0, blocks: [], bestCombo: 0, splits: 0 };
 let today = { eaten: 0, stuck: 0, bestCombo: 0 };
 let report = null, cardRects = [];
 let rainAcc = 0, puddleAcc = 0, lastRain = 'dry';
@@ -280,7 +281,7 @@ function buildMap(m) {
 function newSeason() {
   day = 1;
   upgrades = { ducklings: 0, bigquack: 0, hose: 0, brisk: 0 };
-  season = { eaten: 0, bottles: 0, stuck: 0, blocks: [], bestCombo: 0 };
+  season = { eaten: 0, bottles: 0, stuck: 0, blocks: [], bestCombo: 0, splits: 0 };
   startDay();
 }
 
@@ -514,6 +515,7 @@ function split() {
   for (const d of ducks) d.state = 'follow';
   patrols.push({ head, ducks, trail: player.trail.slice(pa.i), P: heading, D, mode: 'run', stuck: false, age: 0 });
   floater(head.x, head.y - 20, 'off you go!', '#fff3b0');
+  season.splits++;
   Sfx.quack();
 }
 
@@ -824,6 +826,19 @@ function drawHud() {
   if (Sfx.muted) text('muted', W - 18, 52, 12, '#aaa', 'right', 'normal');
 }
 
+/* Until the player has split once this season, nudge them after a while. */
+function drawSplitHint() {
+  if (scene !== 'play' || season.splits || clearT > 0 || !line.length || played() < SPLIT_HINT_AFTER) return;
+  const touch = matchMedia('(pointer: coarse)').matches;
+  const msg = (touch ? 'TAP' : 'Press SPACE') + ' to send half your flock off on patrol';
+  const pulse = 0.75 + 0.25 * Math.sin(clock * 5);
+  ctx.globalAlpha = pulse;
+  rr(250, 655, 500, 36, 18); ctx.fillStyle = 'rgba(24,30,16,.9)'; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = '#f2c14e'; ctx.stroke();
+  text('🦆 ' + msg, 500, 673, 16, '#fff3b0', 'center');
+  ctx.globalAlpha = 1;
+}
+
 function drawFloaters() {
   for (const f of floaters) {
     ctx.globalAlpha = 1 - f.t / f.life;
@@ -907,6 +922,7 @@ function draw() {
   drawWeather();
   drawFloaters();
   drawHud();
+  drawSplitHint();
   if (scene === 'title') drawTitle();
   else if (scene === 'night') drawNight();
   else if (scene === 'harvest') drawHarvest();
