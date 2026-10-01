@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Snail Patrol — prototype</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #1d2616;
+    background-image: radial-gradient(ellipse at 50% 0%, #3d5228 0%, #1d2616 70%);
+    font-family: 'Trebuchet MS', 'Avenir Next', system-ui, sans-serif;
+    color: #f6ecd2;
+    overflow: hidden; overscroll-behavior: none;
+  }
+  body { display: flex; align-items: center; justify-content: center; padding: 16px; }
+  #wrap { display: flex; flex-direction: column; align-items: center; }
+  canvas {
+    display: block;
+    border-radius: 14px; border: 4px solid #2b3a1e;
+    box-shadow: 0 24px 60px rgba(0,0,0,.55);
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #hint { text-align: center; font-size: 13px; opacity: .55; margin-top: 10px; }
+  @media (pointer: coarse) {
+    body { padding: 0; }
+    canvas { border: 0; border-radius: 0; box-shadow: none; }
+    #hint { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="1000" height="700"></canvas>
+  <div id="hint">Arrows / WASD to steer &nbsp;·&nbsp; Space sends half the line off on patrol &nbsp;·&nbsp; Q big quack (once earned) &nbsp;·&nbsp; walk into a patrol to regroup &nbsp;·&nbsp; M mutes &nbsp;·&nbsp; phone: swipe to steer, tap to send<br><a href="pitch.html" style="color:inherit">about this game</a></div>
+</div>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ *
+ *  SNAIL PATROL  (grey-box prototype, v2)
+ *  You lead a line of runner ducks around a vineyard block, Pac-Man
+ *  style. Every duck in your line slows you down. Send half the line
+ *  off as a patrol: patrols are dumb, they mow the rows in a zig-zag
+ *  and stop dead at puddles. Walk into a patrol to take it back.
+ *  Five days, a different block each day, then the harvest.
+ * ------------------------------------------------------------------ */
+
+const cv  = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const W = 1000, H = 700;
+
+/* ---------- tuning ---------- */
+const DAY_SECONDS     = 90;
+const SEASON_DAYS     = 5;
+const RAINS           = [{ at: 22, len: 16 }, { at: 56, len: 18 }];  // seconds into the day
+const RAIN_WARN       = 4;      // clouds gather this long before a shower
+const START_FOLLOWERS = 3;      // plus the leader
+const SPACING         = 26;     // path distance between ducks in a line
+const LEAD_SPEED      = 250;    // leader alone
+const SLOWDOWN        = 0.12;   // speed = LEAD_SPEED / (1 + SLOWDOWN * ducks behind you)
+const PATROL_SPEED    = 140;
+const BRISK           = 0.25;   // patrol speed bonus per Brisk waddle
+const EAT_R           = 38;     // reaches a snail on the grapes from the middle of the path
+const COLLECT_R       = 26;
+const COLLECT_AFTER   = 0.8;    // a fresh patrol can't be re-absorbed straight away
+const JOIN_SPEED      = 380;
+const INFEST          = 0.6;    // share of vine edges with a snail on them at dawn, day 1
+const INFEST_PER_DAY  = 0.05;   // a little worse each day
+const RAIN_SNAILS     = 0.8;    // new snails per second while it rains
+const CRAWL_SECS      = 4;      // rain snails: time from ground to grapes
+const MUNCH_RATE      = 0.009;  // bunch health lost per second per snail on it
+const COMBO_WINDOW    = 0.7;    // eat again within this to keep a combo going
+const CLEAR_BONUS     = 0.5;    // bonus bottles per second left when the block is clear
+const CLEAR_PAUSE     = 1.8;    // a moment to enjoy it before night falls
+const BIG_QUACK_R     = 170;
+const PUDDLE_SECS     = 20;
+const PUDDLE_SPAWN    = 0.35;   // per second while it rains
+const BLOCK_BOTTLES   = 150;    // a perfect block
+
+/* ---------- maps ---------- *
+ * 19 x 11 tiles.  # vine   . path   o pond
+ * Every map keeps the bottom row open: that's where the flock starts.  */
+const MAPS = [
+  { name: 'The long rows', rows: [
+    '...................',
+    '.########.########.',
+    '...................',
+    '.########.########.',
+    '...................',
+    '.########.########.',
+    '...................',
+    '.########.########.',
+    '...................',
+    '.########.########.',
+    '...................',
+  ]},
+  { name: 'Staggered', rows: [
+    '...................',
+    '.#####.#####.#####.',
+    '...................',
+    '.###.#########.###.',
+    '...................',
+    '.#####.#####.#####.',
+    '...................',
+    '.###.#########.###.',
+    '...................',
+    '.#####.#####.#####.',
+    '...................',
+  ]},
+  { name: 'The pond', rows: [
+    '...................',
+    '.#################.',
+    '...................',
+    '.#####.......#####.',
+    '.#####.ooooo.#####.',
+    '.......ooooo.......',
+    '.#####.ooooo.#####.',
+    '.#####.......#####.',
+    '...................',
+    '.#################.',
+    '...................',
+  ]},
+  { name: 'Terraces', rows: [
+    '...................',
+    '.#.#.#.#.#.#.#.#.#.',
+    '.#.#.#.#.#.#.#.#.#.',
+    '.#.#.#.#.#.#.#.#.#.',
+    '.#.#.#.#.#.#.#.#.#.',
+    '...................',
+    '.#.#.#.#.#.#.#.#.#.',
+    '.#.#.#.#.#.#.#.#.#.',
+    '.#.#.#.#.#.#.#.#.#.',
+    '.#.#.#.#.#.#.#.#.#.',
+    '...................',
+  ]},
+  { name: 'The maze', rows: [
+    '...................',
+    '.###.###.#.###.###.',
+    '.....#.......#.....',
+    '.###.#.#####.#.###.',
+    '.........#.........',
+    '####.###...###.####',
+    '.........#.........',
+    '.###.#.#####.#.###.',
+    '.....#.......#.....',
+    '.###.###.#.###.###.',
+    '...................',
+  ]},
+];
+const COLS = 19, ROWS = 11, T = 50;
+const F = { x0: 25, y0: 96, x1: 25 + COLS * T, y1: 96 + ROWS * T };
+const START = { c: 9, r: 10 };
+const cxOf = c => F.x0 + T * (c + 0.5);
+const cyOf = r => F.y0 + T * (r + 0.5);
+const DIRS = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }];
+const neg = v => ({ x: -v.x, y: -v.y });
+
+let scale = 1;
+function relayout() {
+  const coarse = matchMedia('(pointer: coarse)').matches;
+  const pad = coarse ? 0 : 32, below = coarse ? 0 : 40;
+  const s = Math.min((innerWidth - pad) / W, (innerHeight - pad - below) / H);
+  const dpr = window.devicePixelRatio || 1;
+  cv.style.width  = Math.round(W * s) + 'px';
+  cv.style.height = Math.round(H * s) + 'px';
+  cv.width  = Math.round(W * s * dpr);
+  cv.height = Math.round(H * s * dpr);
+  scale = cv.width / W;
+}
+
+/* The world is drawn at half resolution and scaled up without smoothing,
+   which is a cheap stand-in for pixel art until there is real art. */
+const PIX = 0.5;
+const off  = document.createElement('canvas');
+off.width = W * PIX; off.height = H * PIX;
+const g = off.getContext('2d');
+
+/* ---------- helpers ---------- */
+const rand  = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const dist  = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+const lerp  = (a, b, t) => a + (b - a) * t;
+
+function ellipse(c, x, y, rx, ry) { c.beginPath(); c.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); }
+function circle(c, x, y, r) { c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); }
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function text(str, x, y, size, colour, align, weight) {
+  ctx.font = (weight || 'bold') + ' ' + size + 'px "Trebuchet MS", "Avenir Next", system-ui, sans-serif';
+  ctx.fillStyle = colour; ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(str, x, y);
+}
+function outlined(str, x, y, size, colour, align) {
+  ctx.font = 'bold ' + size + 'px "Trebuchet MS", "Avenir Next", system-ui, sans-serif';
+  ctx.textAlign = align || 'center'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(20,24,12,.85)'; ctx.lineJoin = 'round';
+  ctx.strokeText(str, x, y); ctx.fillStyle = colour; ctx.fillText(str, x, y);
+}
+
+/* ---------- sound ---------- */
+const Sfx = {
+  ac: null, muted: false,
+  unlock() {
+    if (!this.ac) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) this.ac = new AC(); }
+    if (this.ac && this.ac.state === 'suspended') this.ac.resume();
+  },
+  tone(f0, f1, dur, type, vol) {
+    if (this.muted || !this.ac) return;
+    const t = this.ac.currentTime, o = this.ac.createOscillator(), v = this.ac.createGain();
+    o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    v.gain.setValueAtTime(vol, t); v.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(v); v.connect(this.ac.destination); o.start(t); o.stop(t + dur + 0.02);
+  },
+  quack()  { this.tone(620, 330, 0.13, 'sawtooth', 0.07); setTimeout(() => this.tone(560, 300, 0.1, 'sawtooth', 0.05), 110); },
+  pop(n)   { const f = 600 * Math.pow(2, Math.min((n || 1) - 1, 18) / 12); this.tone(f, f * 2, 0.05, 'square', 0.035); },
+  saved()  { [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => this.tone(f, f * 1.01, 0.12, 'triangle', 0.06), i * 70)); },
+  bigQuack(){ this.tone(300, 120, 0.35, 'sawtooth', 0.12); setTimeout(() => this.tone(260, 100, 0.3, 'sawtooth', 0.09), 140); },
+  splash() { this.tone(420, 110, 0.22, 'triangle', 0.07); },
+  regroup(){ this.tone(440, 660, 0.12, 'triangle', 0.06); setTimeout(() => this.tone(660, 880, 0.12, 'triangle', 0.05), 90); },
+  thunder(){ this.tone(90, 40, 0.8, 'sawtooth', 0.05); },
+  chime()  { this.tone(660, 990, 0.25, 'triangle', 0.06); },
+};
+
+/* ---------- state ---------- */
+let scene = 'title';            // title | play | night | harvest
+let day = 1, timeLeft = DAY_SECONDS, clock = 0;
+let grid = [], vines = [], edges = [], tufts = [], rows = [];
+let snails = [], puddles = [], patrols = [], floaters = [];
+let leader, line, player;       // player = { head: leader, ducks: line, trail }
+let upgrades = { ducklings: 0, bigquack: 0, hose: 0, brisk: 0 };
+let season = { eaten: 0, bottles: 0, stuck: 0, blocks: [], bestCombo: 0 };
+let today = { eaten: 0, stuck: 0, bestCombo: 0 };
+let report = null, cardRects = [];
+let rainAcc = 0, puddleAcc = 0, lastRain = 'dry';
+let combo = 0, comboT = 0, quacks = 0, bigRing = 0, clearT = 0, clearedAt = null;
+
+const UPGRADES = [
+  { key: 'ducklings', name: 'Hatch a duckling', desc: ['+1 duck.', 'One more to send out.'] },
+  { key: 'bigquack',  name: 'Big Quack',        desc: ['Press Q once a day:', 'eat every snail nearby.'] },
+  { key: 'hose',      name: 'Sweep the puddles', desc: ['Puddles dry twice as', 'fast. Stuck patrols', 'move on sooner.'] },
+  { key: 'brisk',     name: 'Brisk waddle',     desc: ['Patrols walk', '25% faster.'] },
+];
+
+const open = (c, r) => r >= 0 && r < ROWS && c >= 0 && c < COLS && grid[r][c] === '.';
+const puddleAt = (c, r) => puddles.some(p => p.c === c && p.r === r);
+
+function buildMap(m) {
+  grid = m.rows;
+  vines = []; edges = []; tufts = [];
+  const at = {};
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const ch = grid[r][c];
+    if (ch === '#') { const v = { c, r, x: cxOf(c), y: cyOf(r), g: 1, exposed: false }; vines.push(v); at[c + ',' + r] = v; }
+    else if (ch === '.') for (let i = 0; i < 3; i++) tufts.push({ x: cxOf(c) + rand(-22, 20), y: cyOf(r) + rand(-22, 20), s: Math.random() < 0.5 });
+  }
+  for (const v of vines) for (const d of DIRS) if (open(v.c + d.x, v.r + d.y)) { edges.push({ v, d }); v.exposed = true; }
+  for (const v of vines) { v.right = !!at[(v.c + 1) + ',' + v.r]; v.down = !!at[v.c + ',' + (v.r + 1)]; }
+  // A "row" is a run of vines joined by wire. Clear every snail off one and it's saved.
+  rows = [];
+  for (const v of vines) {
+    if (v.row !== undefined) continue;
+    const row = { vines: [], infested: false, flash: 0 }, stack = [v];
+    v.row = rows.length; rows.push(row);
+    while (stack.length) {
+      const u = stack.pop(); row.vines.push(u);
+      for (const d of DIRS) { const n = at[(u.c + d.x) + ',' + (u.r + d.y)]; if (n && n.row === undefined) { n.row = v.row; stack.push(n); } }
+    }
+    row.x = row.vines.reduce((a, u) => a + u.x, 0) / row.vines.length;
+    row.y = row.vines.reduce((a, u) => a + u.y, 0) / row.vines.length;
+  }
+}
+
+function newSeason() {
+  day = 1;
+  upgrades = { ducklings: 0, bigquack: 0, hose: 0, brisk: 0 };
+  season = { eaten: 0, bottles: 0, stuck: 0, blocks: [], bestCombo: 0 };
+  startDay();
+}
+
+function makeDuck(x, y, duckling) { return { x, y, a: 0, duckling, state: 'follow', peck: 0 }; }
+
+function startDay() {
+  buildMap(MAPS[(day - 1) % MAPS.length]);
+  timeLeft = DAY_SECONDS;
+  snails = []; puddles = []; patrols = []; floaters = [];
+  today = { eaten: 0, stuck: 0, bestCombo: 0 };
+  rainAcc = 0; puddleAcc = 0; lastRain = 'dry';
+  combo = 0; comboT = 0; bigRing = 0; clearT = 0; clearedAt = null;
+  quacks = upgrades.bigquack;
+  // Dawn: the block is already crawling with them.
+  const density = Math.min(0.9, INFEST + INFEST_PER_DAY * (day - 1));
+  for (const e of edges) if (Math.random() < density) addSnail(e, 'munch');
+  leader = { x: cxOf(START.c), y: cyOf(START.r), tc: START.c, tr: START.r, dir: { x: 0, y: 0 }, want: null, a: 0, peck: 0 };
+  // The line starts formed, trailing off to the left along the bottom path.
+  const trail = [];
+  for (let x = leader.x - 3; x > F.x0 - 400; x -= 3) trail.push({ x, y: leader.y });
+  line = [];
+  const n = START_FOLLOWERS + upgrades.ducklings;
+  for (let i = 0; i < n; i++) line.push(makeDuck(leader.x - (i + 1) * SPACING, leader.y, i >= START_FOLLOWERS));
+  player = { head: leader, ducks: line, trail };
+  scene = 'play';
+  floater(500, 120, 'Day ' + day + ': ' + MAPS[(day - 1) % MAPS.length].name, '#fff3b0', 1.8);
+}
+
+const played = () => DAY_SECONDS - timeLeft;
+function weather() {
+  const t = played();
+  for (const r of RAINS) {
+    if (t >= r.at && t < r.at + r.len) return 'rain';
+    if (t >= r.at - RAIN_WARN && t < r.at) return 'warn';
+  }
+  return 'dry';
+}
+const puddleSecs = () => PUDDLE_SECS * Math.pow(0.5, upgrades.hose);
+function vineHealth() {
+  let n = 0, s = 0;
+  for (const v of vines) if (v.exposed) { n++; s += v.g; }
+  return n ? s / n : 1;
+}
+const leadSpeed = () => LEAD_SPEED / (1 + SLOWDOWN * line.length);
+const totalDucks = () => 1 + START_FOLLOWERS + upgrades.ducklings;
+
+function floater(x, y, str, colour, life) { floaters.push({ x, y, str, colour, t: 0, life: life || 0.9 }); }
+
+/* ---------- input ---------- */
+const KEYDIR = { arrowup: DIRS[3], w: DIRS[3], arrowdown: DIRS[2], s: DIRS[2],
+                 arrowleft: DIRS[1], a: DIRS[1], arrowright: DIRS[0], d: DIRS[0] };
+
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  Sfx.unlock();
+  if (k in KEYDIR || k === ' ') e.preventDefault();
+  if (k === 'm') { Sfx.muted = !Sfx.muted; return; }
+  if (scene === 'play') {
+    if (k in KEYDIR) leader.want = KEYDIR[k];
+    else if (k === ' ' && !e.repeat) split();
+    else if (k === 'q' && !e.repeat) bigQuack();
+  }
+  else if (scene === 'title' && (k === ' ' || k === 'enter')) newSeason();
+  else if (scene === 'night' && ['1', '2', '3', '4'].includes(k)) choose(+k - 1);
+  else if (scene === 'harvest' && (k === ' ' || k === 'enter')) scene = 'title';
+});
+
+/* Touch/mouse: a swipe sets the direction (Pac-Man style), a tap sends a patrol. */
+const Ptr = { id: null, sx: 0, sy: 0, moved: false, t0: 0 };
+const SWIPE = 18;
+function toGame(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H };
+}
+cv.addEventListener('pointerdown', e => {
+  Sfx.unlock();
+  const p = toGame(e);
+  if (scene !== 'play') { tapScreen(p); return; }
+  if (e.pointerType === 'mouse') return;          // on a computer, play is keyboard only
+  Object.assign(Ptr, { id: e.pointerId, sx: p.x, sy: p.y, moved: false, t0: performance.now() });
+  cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener('pointermove', e => {
+  if (e.pointerId !== Ptr.id || scene !== 'play') return;
+  const p = toGame(e), dx = p.x - Ptr.sx, dy = p.y - Ptr.sy;
+  if (Math.hypot(dx, dy) < SWIPE) return;
+  leader.want = Math.abs(dx) > Math.abs(dy) ? DIRS[dx > 0 ? 0 : 1] : DIRS[dy > 0 ? 2 : 3];
+  Ptr.sx = p.x; Ptr.sy = p.y; Ptr.moved = true;     // re-anchor so one long drag can steer several turns
+});
+function ptrUp(e) {
+  if (e.pointerId !== Ptr.id) return;
+  if (!Ptr.moved && performance.now() - Ptr.t0 < 300 && scene === 'play') split();
+  Ptr.id = null;
+}
+cv.addEventListener('pointerup', ptrUp);
+cv.addEventListener('pointercancel', ptrUp);
+
+function tapScreen(p) {
+  if (scene === 'title') newSeason();
+  else if (scene === 'harvest') scene = 'title';
+  else if (scene === 'night') {
+    cardRects.forEach((r, i) => { if (p.x > r.x && p.x < r.x + r.w && p.y > r.y && p.y < r.y + r.h) choose(i); });
+  }
+}
+
+/* ---------- grid movement ---------- *
+ * A mover sits on a tile centre or travels between two. `tc,tr` is the tile
+ * it's heading for. At each centre `choose` picks the next direction, or
+ * null to stop there.                                                       */
+function advance(e, d, choose) {
+  while (d > 0) {
+    const tx = cxOf(e.tc), ty = cyOf(e.tr);
+    const rem = Math.abs(tx - e.x) + Math.abs(ty - e.y);
+    if (rem > d) { e.x += e.dir.x * d; e.y += e.dir.y * d; return; }
+    e.x = tx; e.y = ty; d -= rem;
+    const nd = choose();
+    if (!nd) { e.dir = { x: 0, y: 0 }; return; }
+    e.dir = nd; e.tc += nd.x; e.tr += nd.y;
+    e.a = Math.atan2(nd.y, nd.x);
+  }
+}
+
+function moveLeader(dt) {
+  const e = leader, w = e.want, moving = e.dir.x || e.dir.y;
+  if (w && moving && w.x === -e.dir.x && w.y === -e.dir.y) {      // reverse on the spot
+    e.tc -= e.dir.x; e.tr -= e.dir.y; e.dir = w; e.a = Math.atan2(w.y, w.x);
+  }
+  advance(e, leadSpeed() * dt, () => {
+    if (e.want && open(e.tc + e.want.x, e.tr + e.want.y)) return e.want;
+    if ((e.dir.x || e.dir.y) && open(e.tc + e.dir.x, e.tr + e.dir.y)) return e.dir;
+    return null;
+  });
+}
+
+/* Patrols are dumb on purpose: walk straight; at the end, shift one lane
+   sideways and come back. A lawnmower. They stop dead in puddles.       */
+function patrolChoose(pt) {
+  const h = pt.head, o = v => open(h.tc + v.x, h.tr + v.y);
+  if (puddleAt(h.tc, h.tr)) {
+    if (!pt.stuck) { pt.stuck = true; today.stuck++; season.stuck++; floater(h.x, h.y - 18, 'splash!', '#9fd4ff'); Sfx.splash(); }
+    return null;
+  }
+  if (pt.mode === 'run') {
+    if (o(pt.P)) return pt.P;
+    if (!o(pt.D)) pt.D = neg(pt.D);
+    if (o(pt.D)) { pt.mode = 'shift'; pt.P = neg(pt.P); return pt.D; }
+    pt.P = neg(pt.P); return o(pt.P) ? pt.P : null;
+  }
+  if (o(pt.P)) { pt.mode = 'run'; return pt.P; }
+  if (o(pt.D)) return pt.D;
+  if (o(neg(pt.P))) { pt.P = neg(pt.P); pt.mode = 'run'; return pt.P; }
+  pt.D = neg(pt.D); return o(pt.D) ? pt.D : null;
+}
+
+function movePatrols(dt) {
+  for (const pt of patrols) {
+    pt.age += dt;
+    if (pt.stuck) { if (puddleAt(pt.head.tc, pt.head.tr)) continue; pt.stuck = false; }
+    advance(pt.head, PATROL_SPEED * (1 + BRISK * upgrades.brisk) * dt, () => patrolChoose(pt));
+  }
+}
+
+/* ---------- lines of ducks ---------- */
+function recordTrail(gr) {
+  const h = gr.head, t = gr.trail;
+  if (!t.length || dist(t[0].x, t[0].y, h.x, h.y) >= 3) {
+    t.unshift({ x: h.x, y: h.y });
+    if (t.length > 500) t.length = 500;
+  }
+}
+
+/* A point `d` pixels back along a line's path, the heading there, and the
+   trail index just past it. */
+function pointAlong(gr, d) {
+  let px = gr.head.x, py = gr.head.y, acc = 0;
+  for (let i = 0; i < gr.trail.length; i++) {
+    const q = gr.trail[i], seg = dist(px, py, q.x, q.y);
+    if (seg > 0 && acc + seg >= d) {
+      const f = (d - acc) / seg;
+      return { x: px + (q.x - px) * f, y: py + (q.y - py) * f, a: Math.atan2(py - q.y, px - q.x), i };
+    }
+    acc += seg; px = q.x; py = q.y;
+  }
+  return { x: px, y: py, a: gr.head.a, i: gr.trail.length };
+}
+
+function updateFollowers(gr, dt) {
+  gr.ducks.forEach((d, i) => {
+    const t = pointAlong(gr, (i + 1) * SPACING);
+    const ox = d.x, oy = d.y;
+    if (d.state === 'join') {
+      const m = dist(d.x, d.y, t.x, t.y);
+      if (m < 10) d.state = 'follow';
+      else { const s = Math.min(1, JOIN_SPEED * dt / m); d.x += (t.x - d.x) * s; d.y += (t.y - d.y) * s; }
+    } else {
+      const k = Math.min(1, dt * 14);
+      d.x += (t.x - d.x) * k; d.y += (t.y - d.y) * k;
+    }
+    if (dist(ox, oy, d.x, d.y) > 0.3) d.a = Math.atan2(d.y - oy, d.x - ox);
+    d.peck = Math.max(0, d.peck - dt);
+  });
+}
+
+function cardinal(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return Math.abs(c) >= Math.abs(s) ? { x: Math.sign(c) || 1, y: 0 } : { x: 0, y: Math.sign(s) };
+}
+
+/* Send the back half of your line off as a patrol, carrying on the way
+   it was walking. */
+function split() {
+  const n = line.length;
+  if (!n) { floater(leader.x, leader.y - 22, 'nobody left to send!', '#ffd0c0'); return; }
+  const k = Math.ceil(n / 2), idx = n - k;
+  const pa = pointAlong(player, (idx + 1) * SPACING);
+  const heading = cardinal(pa.a);
+  const ducks = line.splice(idx);
+  const head = ducks.shift();
+  const u = (pa.x - F.x0) / T - 0.5, v = (pa.y - F.y0) / T - 0.5;
+  if (heading.x) {
+    head.tr = Math.round(v); head.y = cyOf(head.tr); head.x = pa.x;
+    head.tc = heading.x > 0 ? Math.ceil(u - 1e-6) : Math.floor(u + 1e-6);
+  } else {
+    head.tc = Math.round(u); head.x = cxOf(head.tc); head.y = pa.y;
+    head.tr = heading.y > 0 ? Math.ceil(v - 1e-6) : Math.floor(v + 1e-6);
+  }
+  head.dir = heading; head.a = Math.atan2(heading.y, heading.x);
+  // Drift sideways towards the middle of the block.
+  const D = heading.x ? { x: 0, y: head.y < (F.y0 + F.y1) / 2 ? 1 : -1 }
+                      : { x: head.x < (F.x0 + F.x1) / 2 ? 1 : -1, y: 0 };
+  for (const d of ducks) d.state = 'follow';
+  patrols.push({ head, ducks, trail: player.trail.slice(pa.i), P: heading, D, mode: 'run', stuck: false, age: 0 });
+  floater(head.x, head.y - 20, 'off you go!', '#fff3b0');
+  Sfx.quack();
+}
+
+function collectPatrols() {
+  for (let i = patrols.length - 1; i >= 0; i--) {
+    const pt = patrols[i];
+    if (pt.age < COLLECT_AFTER) continue;
+    const all = [pt.head, ...pt.ducks];
+    if (all.some(d => dist(d.x, d.y, leader.x, leader.y) < COLLECT_R)) {
+      patrols.splice(i, 1);
+      for (const d of all) line.push({ x: d.x, y: d.y, a: d.a, duckling: d.duckling, state: 'join', peck: 0 });
+      floater(leader.x, leader.y - 22, 'regrouped +' + all.length, '#c9f29b');
+      Sfx.regroup();
+    }
+  }
+}
+
+/* ---------- snails, rain, puddles ---------- */
+/* A snail on the vine edge `e`. 'munch' ones are already on the grapes;
+   'crawl' ones (brought by rain) climb up first. */
+function addSnail(e, state) {
+  const bx = e.v.x + e.d.x * T / 2, by = e.v.y + e.d.y * T / 2;       // where vine meets path
+  const j = rand(-12, 12), jx = e.d.y ? j : 0, jy = e.d.x ? j : 0;
+  const s = { edge: e, v: e.v, t: 0, state, wob: rand(0, 6),
+    sx: bx + e.d.x * 13 + jx, sy: by + e.d.y * 13 + jy,
+    ex: bx - e.d.x * 4 + jx,  ey: by - e.d.y * 4 + jy };
+  if (state === 'munch') { s.t = 1; s.x = s.ex; s.y = s.ey; } else { s.x = s.sx; s.y = s.sy; }
+  snails.push(s);
+  rows[e.v.row].infested = true;
+}
+
+function rainSnail() {
+  for (let tries = 0; tries < 10; tries++) {
+    const e = edges[Math.floor(Math.random() * edges.length)];
+    if (!snails.some(s => s.edge === e)) { addSnail(e, 'crawl'); return; }
+  }
+}
+
+/* `own` = eaten by you or your line (or your Big Quack): only those build combos. */
+function eatSnail(i, d, own) {
+  const s = snails[i];
+  snails.splice(i, 1);
+  if (d) d.peck = 0.15;
+  today.eaten++; season.eaten++;
+  if (own) {
+    combo = comboT > 0 ? combo + 1 : 1; comboT = COMBO_WINDOW;
+    today.bestCombo = Math.max(today.bestCombo, combo);
+    season.bestCombo = Math.max(season.bestCombo, combo);
+  }
+  if (own && combo >= 3) floater(s.x, s.y - 12, 'x' + combo, combo >= 10 ? '#ff9ad5' : combo >= 6 ? '#ffc36b' : '#fff3b0');
+  else floater(s.x, s.y - 12, '+1', '#fff3b0');
+  Sfx.pop(own ? combo : 1);
+  const row = rows[s.v.row];
+  if (row.infested && !snails.some(o => o.v.row === s.v.row)) {
+    row.infested = false; row.flash = 0.8;
+    floater(row.x, row.y - 8, 'Row saved!', '#c9f29b', 1.3);
+    Sfx.saved();
+  }
+}
+
+function bigQuack() {
+  if (!upgrades.bigquack) return;
+  if (quacks <= 0) { floater(leader.x, leader.y - 22, 'no Big Quack left today', '#ffd0c0'); return; }
+  quacks--; bigRing = 0.5; leader.peck = 0.3;
+  Sfx.bigQuack();
+  for (let i = snails.length - 1; i >= 0; i--)
+    if (dist(snails[i].x, snails[i].y, leader.x, leader.y) < BIG_QUACK_R) eatSnail(i, null, true);
+}
+
+function spawnPuddle() {
+  if (puddles.length >= 2 + day) return;
+  for (let tries = 0; tries < 12; tries++) {
+    const c = Math.floor(Math.random() * COLS), r = Math.floor(Math.random() * ROWS);
+    if (!open(c, r) || puddleAt(c, r) || (c === leader.tc && r === leader.tr)) continue;
+    if (puddles.some(p => Math.abs(p.c - c) + Math.abs(p.r - r) < 3)) continue;
+    puddles.push({ c, r, x: cxOf(c), y: cyOf(r), life: puddleSecs(), grow: 0 });
+    return;
+  }
+}
+
+function allDucks() {
+  const out = [leader, ...line];
+  for (const pt of patrols) out.push(pt.head, ...pt.ducks);
+  return out;
+}
+
+function updateSnails(dt) {
+  for (const s of snails) {
+    if (s.state === 'crawl') {
+      s.t += dt / CRAWL_SECS;
+      const k = Math.min(1, s.t);
+      s.x = lerp(s.sx, s.ex, k); s.y = lerp(s.sy, s.ey, k);
+      if (s.t >= 1) s.state = 'munch';
+    } else {
+      s.v.g = Math.max(0, s.v.g - MUNCH_RATE * dt);
+    }
+  }
+  const eaters = allDucks();
+  for (let i = snails.length - 1; i >= 0; i--) {
+    const s = snails[i];
+    const d = eaters.find(d => dist(d.x, d.y, s.x, s.y) < EAT_R);
+    if (d) eatSnail(i, d, d === leader || line.includes(d));
+  }
+}
+
+function update(dt) {
+  clock += dt;
+  for (const f of floaters) f.t += dt;
+  floaters = floaters.filter(f => f.t < f.life);
+  if (scene !== 'play') return;
+
+  if (clearT > 0) { clearT -= dt; if (clearT <= 0) endDay(); return; }
+  timeLeft -= dt;
+  if (timeLeft <= 0) { endDay(); return; }
+  comboT = Math.max(0, comboT - dt);
+  bigRing = Math.max(0, bigRing - dt);
+  for (const r of rows) r.flash = Math.max(0, r.flash - dt);
+  leader.peck = Math.max(0, leader.peck - dt);
+  for (const pt of patrols) pt.head.peck = Math.max(0, pt.head.peck - dt);
+
+  const w = weather();
+  if (w === 'warn' && lastRain === 'dry') floater(500, 120, 'clouds gathering…', '#dfe8f0', 1.4);
+  if (w === 'rain' && lastRain !== 'rain') { floater(500, 120, 'RAIN! the snails are coming out', '#bfe3ff', 1.6); Sfx.thunder(); }
+  lastRain = w;
+
+  if (w === 'rain') {
+    rainAcc += RAIN_SNAILS * dt; while (rainAcc >= 1) { rainAcc--; rainSnail(); }
+    puddleAcc += PUDDLE_SPAWN * dt; while (puddleAcc >= 1) { puddleAcc--; spawnPuddle(); } }
+  for (const p of puddles) { p.life -= dt; p.grow = Math.min(1, p.grow + dt * 2); }
+  puddles = puddles.filter(p => p.life > 0);
+
+  moveLeader(dt);
+  recordTrail(player);
+  updateFollowers(player, dt);
+  movePatrols(dt);
+  for (const pt of patrols) { recordTrail(pt); updateFollowers(pt, dt); }
+  collectPatrols();
+  updateSnails(dt);
+  if (!snails.length) {
+    clearedAt = timeLeft; clearT = CLEAR_PAUSE;
+    floater(500, 330, 'BLOCK CLEAR!', '#fff3b0', 1.8);
+    Sfx.saved(); setTimeout(() => Sfx.chime(), 300);
+  }
+}
+
+/* ---------- day, night, harvest ---------- */
+function endDay() {
+  const health = vineHealth();
+  const bonus = clearedAt !== null ? Math.round(clearedAt * CLEAR_BONUS) : 0;
+  const bottles = Math.round(health * BLOCK_BOTTLES) + bonus;
+  season.bottles += bottles;
+  season.blocks.push({ name: MAPS[(day - 1) % MAPS.length].name, bottles });
+  report = { day, eaten: today.eaten, stuck: today.stuck, health, bottles, bonus, left: snails.length,
+             cleared: clearedAt, bestCombo: today.bestCombo };
+  Sfx.chime();
+  scene = day >= SEASON_DAYS ? 'harvest' : 'night';
+}
+
+function choose(i) {
+  const u = UPGRADES[i];
+  if (!u) return;
+  upgrades[u.key]++;
+  day++;
+  startDay();
+}
+
+function tastingNote(h) {
+  if (h >= 0.85) return 'Bright, juicy, faintly smug.';
+  if (h >= 0.65) return 'Plum, pepper and a hint of pond.';
+  if (h >= 0.4)  return 'Brave. Earthy. Mostly leaves.';
+  return 'Snail-forward. Pairs with regret.';
+}
+
+/* ---------- drawing: world (low-res layer) ---------- */
+function drawField() {
+  g.fillStyle = '#5f7f34'; g.fillRect(0, 0, W, H);
+  g.fillStyle = '#86a84f'; g.fillRect(F.x0, F.y0, F.x1 - F.x0, F.y1 - F.y0);
+  for (const t of tufts) { g.fillStyle = t.s ? '#7a9c45' : '#93b35a'; g.fillRect(t.x, t.y, 4, 4); }
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const x = F.x0 + c * T, y = F.y0 + r * T, ch = grid[r][c];
+    if (ch === '#') { g.fillStyle = '#8a6a42'; g.fillRect(x + 2, y + 6, T - 4, T - 12); }
+    else if (ch === 'o') {
+      g.fillStyle = '#4f80ab'; g.fillRect(x, y, T, T);
+      if ((c + r) % 3 === 0) { g.fillStyle = '#7fb0d8'; g.fillRect(x + 12, y + 18, 16, 4); }
+    }
+  }
+  for (const p of puddles) {
+    const fade = Math.min(1, p.life / 3) * p.grow;
+    g.globalAlpha = 0.85 * fade;
+    g.fillStyle = '#5b8db8'; ellipse(g, p.x, p.y, 24, 15); g.fill();
+    g.fillStyle = '#8fbde0'; ellipse(g, p.x - 7, p.y - 4, 10, 4); g.fill();
+    g.globalAlpha = 1;
+  }
+}
+
+function drawVines() {
+  g.fillStyle = '#b9ab8c';
+  for (const v of vines) {                      // wires between neighbouring vines
+    if (v.right) g.fillRect(v.x, v.y - 1, T, 2);
+    if (v.down)  g.fillRect(v.x - 1, v.y, 2, T);
+  }
+  const spots = [[0, 4], [-5, 2], [5, 2], [-2, 8], [3, 8]];
+  for (const r of rows) if (r.flash > 0) {           // a saved row glows for a moment
+    g.fillStyle = `rgba(210,255,160,${r.flash * 0.7})`;
+    for (const v of r.vines) { circle(g, v.x, v.y, 22); g.fill(); }
+  }
+  for (const v of vines) {
+    const sick = v.g < 0.4;
+    g.fillStyle = sick ? '#7d7434' : '#3f7a2e';
+    circle(g, v.x - 9, v.y, 11); g.fill(); circle(g, v.x + 9, v.y, 11); g.fill();
+    g.fillStyle = sick ? '#97893f' : '#56963b';
+    circle(g, v.x, v.y - 3, 10); g.fill();
+    const n = Math.ceil(v.g * 5);
+    g.fillStyle = '#5a2a6e';
+    for (let i = 0; i < n; i++) { circle(g, v.x + spots[i][0], v.y + spots[i][1], 4); g.fill(); }
+  }
+}
+
+function drawSnail(s) {
+  const w = s.state === 'munch' ? Math.sin(clock * 6 + s.wob) * 1.5 : 0;   // munching wiggle
+  const x = s.x + w;
+  g.fillStyle = '#d9cfb4'; ellipse(g, x + 5, s.y + 1, 7, 3); g.fill();
+  g.fillStyle = s.state === 'crawl' ? '#7a5a8a' : '#a0612f'; circle(g, x, s.y, 6); g.fill();   // rain snails are a different shell
+  g.fillStyle = s.state === 'crawl' ? '#b394c4' : '#d99a5c'; circle(g, x - 1, s.y - 1, 3); g.fill();
+}
+
+function drawDuck(d, band) {
+  const s = d.duckling ? 0.72 : 1;
+  g.save(); g.translate(d.x, d.y);
+  g.fillStyle = 'rgba(0,0,0,.2)'; ellipse(g, 0, 5, 11 * s, 6 * s); g.fill();
+  g.rotate(d.a);
+  const peck = d.peck > 0 ? 4 : 0;
+  const body = d.duckling ? '#f6d55c' : '#f3efe2';
+  g.fillStyle = body; ellipse(g, 0, 0, 12 * s, 7 * s); g.fill();
+  g.fillStyle = d.duckling ? '#e8c440' : '#ddd6c2'; ellipse(g, -3 * s, 0, 6 * s, 4 * s); g.fill();   // wing
+  g.fillStyle = body; circle(g, (10 + peck) * s, 0, 5.5 * s); g.fill();                              // head
+  g.fillStyle = '#f0962c'; g.fillRect((14 + peck) * s, -2 * s, 6 * s, 4 * s);                         // beak
+  g.fillStyle = '#222'; g.fillRect((10 + peck) * s, -4 * s, 2, 2);
+  if (band) { g.fillStyle = band; g.fillRect(4 * s, -6 * s, 3, 12 * s); }                              // bandana
+  g.restore();
+}
+
+function drawWorld() {
+  g.setTransform(PIX, 0, 0, PIX, 0, 0);
+  drawField();
+  drawVines();
+  for (const s of snails) drawSnail(s);
+  for (const pt of patrols) if (pt.stuck) {
+    g.strokeStyle = 'rgba(200,230,255,.8)'; g.lineWidth = 2;
+    circle(g, pt.head.x, pt.head.y, 12 + 8 * ((clock * 1.5) % 1)); g.stroke();
+  }
+  const ducks = [...line.map(d => [d, null])];
+  for (const pt of patrols) { ducks.push([pt.head, '#3a7bd5']); for (const d of pt.ducks) ducks.push([d, null]); }
+  ducks.sort((a, b) => a[0].y - b[0].y);
+  for (const [d, band] of ducks) drawDuck(d, band);
+  drawDuck(leader, '#c8402e');
+  if (bigRing > 0) {
+    const t = 1 - bigRing / 0.5;
+    g.strokeStyle = `rgba(255,243,176,${1 - t})`; g.lineWidth = 6;
+    circle(g, leader.x, leader.y, 20 + t * (BIG_QUACK_R - 20)); g.stroke();
+  }
+}
+
+/* ---------- drawing: crisp overlay ---------- */
+function drawWeather() {
+  const w = weather();
+  if (w === 'dry') return;
+  const t = played();
+  const r = RAINS.find(r => t >= r.at - RAIN_WARN && t < r.at + r.len);
+  const into = t - r.at;
+  const dark = w === 'warn' ? (RAIN_WARN + into) / RAIN_WARN : Math.min(1, (r.len - into) / 2);
+  ctx.fillStyle = `rgba(30,45,70,${0.28 * dark})`; ctx.fillRect(0, 0, W, H);
+  if (w === 'rain') {
+    ctx.strokeStyle = 'rgba(200,220,255,.45)'; ctx.lineWidth = 1.5; ctx.beginPath();
+    for (let i = 0; i < 110; i++) {
+      const x = (i * 97 + clock * 900) % (W + 100) - 50, y = (i * 211 + clock * 1400) % H;
+      ctx.moveTo(x, y); ctx.lineTo(x - 6, y + 16);
+    }
+    ctx.stroke();
+  }
+}
+
+function drawHud() {
+  ctx.fillStyle = 'rgba(24,30,16,.88)'; ctx.fillRect(0, 0, W, 76);
+  text('DAY ' + day + ' / ' + SEASON_DAYS, 22, 26, 20, '#f6ecd2');
+  text(MAPS[(day - 1) % MAPS.length].name, 22, 52, 14, '#c7bc9c', 'left', 'normal');
+  // time bar with rain showers marked on it
+  const bx = 190, bw = 300, by = 20, bh = 12;
+  rr(bx, by, bw, bh, 6); ctx.fillStyle = '#3a4526'; ctx.fill();
+  for (const r of RAINS) { ctx.fillStyle = '#4f6f96'; ctx.fillRect(bx + bw * r.at / DAY_SECONDS, by, bw * r.len / DAY_SECONDS, bh); }
+  ctx.fillStyle = '#f2c14e'; ctx.fillRect(bx + bw * played() / DAY_SECONDS - 2, by - 4, 4, bh + 8);
+  // speed meter: how much the line behind you is slowing you down
+  const sp = leadSpeed() / LEAD_SPEED;
+  text('speed', bx, 55, 13, '#c7bc9c', 'left', 'normal');
+  rr(bx + 48, 49, 120, 10, 5); ctx.fillStyle = '#3a4526'; ctx.fill();
+  rr(bx + 48, 49, 120 * sp, 10, 5); ctx.fillStyle = sp > 0.7 ? '#c9f29b' : sp > 0.5 ? '#f2d98b' : '#f2a08b'; ctx.fill();
+  if (!(combo >= 3 && comboT > 0)) text('line ' + line.length, bx + 180, 55, 13, '#c7bc9c', 'left', 'normal');
+
+  text('snails left ' + snails.length, 520, 26, 15, '#fff3b0');
+  if (combo >= 3 && comboT > 0) text('combo x' + combo, 400, 55, 14, '#ffc36b', 'left');
+  const h = vineHealth();
+  text('grapes ' + Math.round(h * 100) + '%', 520, 52, 15, h > 0.7 ? '#c9f29b' : h > 0.4 ? '#f2d98b' : '#f2a08b');
+  const stuck = patrols.filter(p => p.stuck).length;
+  text('patrols ' + patrols.length, 690, 26, 15, '#9cc4ff');
+  if (stuck) text(stuck + ' stuck in a puddle!', 690, 52, 15, '#9fd4ff');
+  text(season.bottles + ' bottles so far', W - 18, 26, 13, '#d9b8c4', 'right', 'normal');
+  if (upgrades.bigquack) text('Q  big quack ×' + quacks, 860, 52, 13, quacks ? '#fff3b0' : '#777', 'left');
+  if (Sfx.muted) text('muted', W - 18, 52, 12, '#aaa', 'right', 'normal');
+}
+
+function drawFloaters() {
+  for (const f of floaters) {
+    ctx.globalAlpha = 1 - f.t / f.life;
+    outlined(f.str, f.x, f.y - f.t * 30, f.life > 1 ? 24 : 15, f.colour);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function panel(x, y, w, h) {
+  ctx.fillStyle = 'rgba(15,20,10,.55)'; ctx.fillRect(0, 0, W, H);
+  rr(x, y, w, h, 18); ctx.fillStyle = '#f6ecd2'; ctx.fill();
+  ctx.lineWidth = 4; ctx.strokeStyle = '#4a3a22'; ctx.stroke();
+}
+
+function drawTitle() {
+  panel(170, 110, 660, 490);
+  text('SNAIL PATROL', 500, 170, 44, '#4a3a22', 'center');
+  text('a duck, a vineyard, no pesticides', 500, 208, 17, '#7a6440', 'center', 'normal');
+  const lines = [
+    'Every block of the farm is crawling with snails at dawn,',
+    'and they’re eating the grapes. Clear the block, fast.',
+    'Any duck that walks past a snail eats it. Chain them for combos.',
+    'Every duck behind you slows you down. SPACE sends the back',
+    'half off on patrol: they mow the rows in a dumb zig-zag',
+    'and stop dead in puddles. Walk into a patrol to take it back.',
+    'Rain brings fresh snails. Five blocks, five days, then harvest.',
+  ];
+  lines.forEach((l, i) => text(l, 500, 262 + i * 30, 17, '#3a2e1a', 'center', 'normal'));
+  ctx.globalAlpha = 0.6 + 0.4 * Math.sin(clock * 4);
+  text('press SPACE or tap to start', 500, 555, 20, '#4a3a22', 'center');
+  ctx.globalAlpha = 1;
+}
+
+function drawNight() {
+  ctx.fillStyle = 'rgba(10,14,30,.6)'; ctx.fillRect(0, 0, W, H);
+  panel(120, 110, 760, 500);
+  text('Day ' + report.day + ' done — ' + report.bottles + ' bottles', 500, 160, 32, '#4a3a22', 'center');
+  text(report.cleared !== null
+         ? 'Block clear with ' + Math.ceil(report.cleared) + 's to spare  (+' + report.bonus + ' bonus bottles)'
+         : 'Out of time, ' + report.left + ' snails still at it', 500, 198, 17, '#5a4a2e', 'center', 'normal');
+  text(report.eaten + ' snails eaten  ·  grapes at ' + Math.round(report.health * 100) + '%  ·  best combo x' +
+       report.bestCombo + '  ·  ' + report.stuck + ' patrols got stuck', 500, 224, 15, '#5a4a2e', 'center', 'normal');
+  text('Tomorrow: ' + MAPS[report.day % MAPS.length].name + '. What do you do tonight?', 500, 262, 17, '#3a2e1a', 'center', 'normal');
+  cardRects = [];
+  UPGRADES.forEach((u, i) => {
+    const x = 142 + i * 182, y = 290, w = 170, h = 190;
+    cardRects.push({ x, y, w, h });
+    rr(x, y, w, h, 14); ctx.fillStyle = '#fffaf0'; ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = '#b89c6a'; ctx.stroke();
+    text(String(i + 1), x + 22, y + 26, 20, '#b89c6a', 'center');
+    text(u.name, x + w / 2, y + 62, 17, '#4a3a22', 'center');
+    u.desc.forEach((d, j) => text(d, x + w / 2, y + 100 + j * 21, 14, '#5a4a2e', 'center', 'normal'));
+    if (upgrades[u.key]) text('had ' + upgrades[u.key] + '×', x + w / 2, y + h - 18, 13, '#9a8458', 'center', 'normal');
+  });
+  text('press 1 – 4', 500, 530, 15, '#7a6440', 'center', 'normal');
+  text(totalDucks() + ' ducks in the flock', 500, 565, 15, '#7a6440', 'center', 'normal');
+}
+
+function drawHarvest() {
+  ctx.fillStyle = 'rgba(40,15,30,.6)'; ctx.fillRect(0, 0, W, H);
+  rr(290, 80, 420, 560, 10); ctx.fillStyle = '#f4ead0'; ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = '#6b1f33'; ctx.stroke();
+  rr(305, 95, 390, 530, 6); ctx.lineWidth = 1.5; ctx.stroke();
+  const h = season.bottles / (SEASON_DAYS * BLOCK_BOTTLES);
+  text('HARVEST', 500, 130, 16, '#6b1f33', 'center');
+  text('Château Canard', 500, 178, 38, '#3b1420', 'center');
+  text('Pinotage · Vintage 2026', 500, 216, 17, '#6b1f33', 'center', 'normal');
+  text(season.bottles, 500, 290, 64, '#3b1420', 'center');
+  text('bottles  (' + SEASON_DAYS * BLOCK_BOTTLES + ' for perfect grapes, plus speed bonuses)', 500, 335, 14, '#6b1f33', 'center', 'normal');
+  season.blocks.forEach((b, i) => text(b.name + '  ' + b.bottles, 500, 368 + i * 20, 13, '#8a5a66', 'center', 'normal'));
+  text('“' + tastingNote(h) + '”', 500, 482, 19, '#3b1420', 'center', 'italic');
+  text('Zero pesticides. ' + season.eaten + ' snails eaten by beak.', 500, 522, 15, '#6b1f33', 'center', 'normal');
+  text('Best combo x' + season.bestCombo + '. ' + season.stuck + ' patrols briefly lost to puddles.', 500, 546, 15, '#6b1f33', 'center', 'normal');
+  text('SPACE or tap for a new season', 500, 600, 15, '#8a5a66', 'center', 'normal');
+}
+
+function draw() {
+  drawWorld();
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(off, 0, 0, W, H);
+  drawWeather();
+  drawFloaters();
+  drawHud();
+  if (scene === 'title') drawTitle();
+  else if (scene === 'night') drawNight();
+  else if (scene === 'harvest') drawHarvest();
+}
+
+/* ---------- boot ---------- */
+let last = 0;
+function frame(t) {
+  const dt = Math.min(0.05, (t - last) / 1000 || 0);
+  last = t;
+  update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+startDay(); floaters = []; scene = 'title';     // a field to look at behind the title card
+relayout();
+addEventListener('resize', relayout);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

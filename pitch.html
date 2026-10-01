@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Snail Patrol — a hackathon game</title>
+<meta name="description" content="Lead a flock of runner ducks through a South African vineyard and clear the snails before the rain. A hackathon game based on a true story.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Nunito:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ground: #f6ecd2;
+    --card: #fffaf0;
+    --ink: #3a2e1a;
+    --soft: #6e5a3a;
+    --vine: #3f7a2e;
+    --leaf: #86a84f;
+    --grape: #5a2a6e;
+    --wine: #6b1f33;
+    --sky: #4f6f96;
+    --beak: #f0962c;
+    --line: #e2d3ae;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #1d2616;
+      --card: #27321d;
+      --ink: #f6ecd2;
+      --soft: #c7bc9c;
+      --vine: #9fd07a;
+      --leaf: #3d5228;
+      --grape: #c79be0;
+      --wine: #f0a6b8;
+      --sky: #9cc4ff;
+      --line: #3a4a2a;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font: 17px/1.6 Nunito, 'Avenir Next', system-ui, sans-serif;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 0 20px; }
+  h1, h2, .pixel { font-family: 'Press Start 2P', ui-monospace, monospace; font-weight: 400; letter-spacing: .02em; }
+  h1 { font-size: clamp(28px, 7vw, 54px); line-height: 1.25; margin: 0 0 18px; }
+  h2 { font-size: clamp(14px, 3vw, 18px); line-height: 1.5; margin: 0 0 18px; color: var(--vine); }
+  p { margin: 0 0 14px; }
+  a { color: var(--wine); }
+
+  /* hero */
+  header { padding: 56px 0 40px; border-bottom: 4px dashed var(--line); }
+  .kicker { font-size: 11px; color: var(--soft); margin-bottom: 18px; }
+  .lede { font-size: clamp(19px, 2.6vw, 23px); font-weight: 700; max-width: 640px; }
+  .sub { color: var(--soft); max-width: 640px; }
+  .ctas { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 26px; }
+  .btn {
+    display: inline-block; padding: 14px 20px; border-radius: 4px; text-decoration: none;
+    font-family: 'Press Start 2P', ui-monospace, monospace; font-size: 12px;
+    border: 3px solid var(--ink); box-shadow: 4px 4px 0 var(--ink); transition: transform .08s, box-shadow .08s;
+  }
+  .btn:hover { transform: translate(2px, 2px); box-shadow: 2px 2px 0 var(--ink); }
+  .btn.primary { background: var(--beak); color: #2a1c08; }
+  .btn.ghost { background: var(--card); color: var(--ink); }
+
+  .flock { display: flex; gap: 6px; align-items: flex-end; margin: 34px 0 0; overflow: hidden; }
+  .flock svg { width: 46px; height: auto; flex: none; image-rendering: pixelated; }
+  .flock svg:nth-child(odd) { animation: waddle .5s steps(2) infinite; }
+  .flock svg:nth-child(even) { animation: waddle .5s steps(2) infinite .25s; }
+  .flock .duckling { width: 32px; }
+  .flock .snail { width: 30px; margin-left: 14px; animation: none; }
+  @keyframes waddle { 0% { transform: translateY(0); } 100% { transform: translateY(-3px); } }
+  @media (prefers-reduced-motion: reduce) { .flock svg { animation: none !important; } }
+
+  section { padding: 44px 0; border-bottom: 4px dashed var(--line); }
+  .story { background: var(--card); border: 3px solid var(--line); border-radius: 6px; padding: 22px 24px; }
+  .story .src { font-size: 14px; color: var(--soft); margin: 0; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border: 3px solid var(--line); border-radius: 6px; padding: 18px 20px; }
+  .card h3 { margin: 0 0 6px; font-size: 18px; }
+  .card p { margin: 0; color: var(--soft); font-size: 16px; }
+  .emoji { font-size: 26px; display: block; margin-bottom: 6px; }
+
+  ol.build { padding-left: 22px; margin: 0; }
+  ol.build li { margin-bottom: 10px; }
+
+  .status li { margin-bottom: 8px; }
+  blockquote { margin: 18px 0 0; padding: 14px 18px; border-left: 6px solid var(--vine); background: var(--card); font-style: italic; }
+
+  .label {
+    max-width: 380px; margin: 0 auto; text-align: center; padding: 26px 22px;
+    background: #f4ead0; color: #3b1420; border: 3px solid #6b1f33; outline: 1.5px solid #6b1f33; outline-offset: -12px; border-radius: 6px;
+  }
+  .label .pixel { font-size: 10px; color: #6b1f33; }
+  .label .name { font-family: Georgia, 'Times New Roman', serif; font-size: 30px; font-weight: 700; margin: 8px 0 2px; }
+  .label .big { font-family: Georgia, serif; font-size: 48px; font-weight: 700; margin: 6px 0 0; }
+  .label em { display: block; margin-top: 10px; font-size: 18px; }
+
+  footer { padding: 44px 0 64px; text-align: center; }
+  footer p { color: var(--soft); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="pixel kicker">A HACKATHON GAME · BASED ON A TRUE STORY</div>
+    <h1>Snail<br>Patrol</h1>
+    <p class="lede">You're the lead duck on a South African wine farm. The vines are crawling with snails. Clear them before the rain, without a drop of pesticide.</p>
+    <p class="sub">A bite-size pixel art arcade game: Pac-Man meets Untitled Goose Game, with a little Stardew Valley.</p>
+    <div class="ctas">
+      <a class="btn primary" href="./">▶ Play the prototype</a>
+      <a class="btn ghost" href="#join">Join the team</a>
+    </div>
+
+    <div class="flock" aria-hidden="true">
+      <!-- pixel ducks: 12x12 grid -->
+      <svg viewBox="0 0 12 12" shape-rendering="crispEdges"><g fill="#f3efe2"><rect x="6" y="1" width="3" height="3"/><rect x="7" y="4" width="2" height="2"/><rect x="3" y="6" width="6" height="4"/><rect x="2" y="7" width="1" height="2"/></g><rect x="9" y="2" width="2" height="1" fill="#f0962c"/><rect x="7" y="2" width="1" height="1" fill="#222"/><rect x="7" y="4" width="2" height="1" fill="#c8402e"/><g fill="#f0962c"><rect x="4" y="10" width="1" height="2"/><rect x="7" y="10" width="1" height="2"/></g></svg>
+      <svg viewBox="0 0 12 12" shape-rendering="crispEdges"><g fill="#f3efe2"><rect x="6" y="1" width="3" height="3"/><rect x="7" y="4" width="2" height="2"/><rect x="3" y="6" width="6" height="4"/><rect x="2" y="7" width="1" height="2"/></g><rect x="9" y="2" width="2" height="1" fill="#f0962c"/><rect x="7" y="2" width="1" height="1" fill="#222"/><g fill="#f0962c"><rect x="4" y="10" width="1" height="2"/><rect x="7" y="10" width="1" height="2"/></g></svg>
+      <svg viewBox="0 0 12 12" shape-rendering="crispEdges"><g fill="#f3efe2"><rect x="6" y="1" width="3" height="3"/><rect x="7" y="4" width="2" height="2"/><rect x="3" y="6" width="6" height="4"/><rect x="2" y="7" width="1" height="2"/></g><rect x="9" y="2" width="2" height="1" fill="#f0962c"/><rect x="7" y="2" width="1" height="1" fill="#222"/><g fill="#f0962c"><rect x="4" y="10" width="1" height="2"/><rect x="7" y="10" width="1" height="2"/></g></svg>
+      <svg class="duckling" viewBox="0 0 12 12" shape-rendering="crispEdges"><g fill="#f6d55c"><rect x="6" y="2" width="3" height="3"/><rect x="3" y="5" width="6" height="4"/></g><rect x="9" y="3" width="2" height="1" fill="#f0962c"/><rect x="7" y="3" width="1" height="1" fill="#222"/><g fill="#f0962c"><rect x="4" y="9" width="1" height="2"/><rect x="7" y="9" width="1" height="2"/></g></svg>
+      <svg class="snail" viewBox="0 0 12 12" shape-rendering="crispEdges"><rect x="1" y="9" width="10" height="2" fill="#d9cfb4"/><rect x="9" y="7" width="1" height="2" fill="#d9cfb4"/><rect x="3" y="4" width="5" height="5" fill="#a0612f"/><rect x="4" y="5" width="3" height="3" fill="#d99a5c"/><rect x="5" y="6" width="1" height="1" fill="#a0612f"/></svg>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>It's a true story</h2>
+    <div class="story">
+      <p>At <strong>Vergenoegd Löw</strong>, a wine estate near Stellenbosch in South Africa, about <strong>1,000 Indian Runner ducks</strong> go to work every morning. They march out to the vineyards and eat the snails, aphids and worms off the vines, instead of the farm using pesticides.</p>
+      <p>The farm has done it for 40 years. The daily duck parade has become a tourist attraction, and neighbouring farms are starting to buy ducks of their own.</p>
+      <p class="src">Source: <a href="https://www.rte.ie/news/newslens/2026/0822/1588801-ducks-south-african-wine-farm/">RTÉ News, August 2026</a></p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>How it plays</h2>
+    <div class="grid">
+      <div class="card"><span class="emoji">🦆</span><h3>Lead the line</h3><p>Steer your flock around the vineyard, Pac-Man style. Any duck that walks past a snail eats it.</p></div>
+      <div class="card"><span class="emoji">🐌</span><h3>Clear the block</h3><p>Every block starts infested. Chain snails for combos, and clear a whole row for a satisfying "Row saved!"</p></div>
+      <div class="card"><span class="emoji">🚶</span><h3>Send patrols</h3><p>Every duck behind you slows you down. Send some off on patrol, but they're gloriously dumb and stop at the first puddle.</p></div>
+      <div class="card"><span class="emoji">🌧️</span><h3>Beat the rain</h3><p>Every shower brings fresh snails onto rows you've cleared. Can you finish before the next one?</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Five days, then the harvest</h2>
+    <p>Each day is a different vineyard block, with one upgrade each night: hatch a duckling, learn the Big Quack, sweep the puddles. At the end of the season your grapes become wine.</p>
+    <div class="label" role="img" aria-label="Example wine label from the game">
+      <div class="pixel">HARVEST</div>
+      <div class="name">Château Canard</div>
+      <div>Pinotage · Vintage 2026</div>
+      <div class="big">684</div>
+      <div>bottles</div>
+      <em>“Plum, pepper and a hint of pond.”</em>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Where it is today</h2>
+    <ul class="status">
+      <li><strong>A playable prototype</strong> that works now: one HTML file, keyboard controlled, grey-box art. <a href="./">Play it here.</a></li>
+      <li><strong>Three versions in, the loop is found.</strong> We tried a defend mode and a free-moving flock and parked both. The keeper is <em>restore the block before the rain</em>.</li>
+      <li><strong>A backlog of ideas is ready:</strong> aiming patrols, a farm-dog "ghost", tourists on the duck parade, named ducks.</li>
+    </ul>
+    <blockquote>"Clearing rows feels great." (an early playtester)</blockquote>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>What we'd build at the hackathon</h2>
+    <p>Take the prototype and make it <em>properly</em>: something you'd show your friends.</p>
+    <ol class="build">
+      <li><strong>Real pixel art</strong>: waddling ducks, snails, vines, puddles, rain and a lovely harvest label</li>
+      <li><strong>Sound and music</strong>: quacks, a rising combo pitch, the "Row saved!" jingle and a cheerful farm tune</li>
+      <li><strong>Better patrols</strong>: aim when you split, and see where they'll go</li>
+      <li><strong>Hand-made maps</strong> in a level editor, so designers can build blocks without code</li>
+      <li><strong>A playable link plus a phone build</strong>, so the demo audience can play on their own phones</li>
+    </ol>
+    <p style="margin-top:16px"><strong>The demo:</strong> live play on the big screen, with everyone in the room competing for the best harvest.</p>
+  </div>
+</section>
+
+<section id="join">
+  <div class="wrap">
+    <h2>Join the team</h2>
+    <p>You don't need to have made a game before.</p>
+    <div class="grid">
+      <div class="card"><span class="emoji">🎨</span><h3>Pixel artist</h3><p>Ducks, snails, vineyard tiles, UI. This is the role that makes or breaks it.</p></div>
+      <div class="card"><span class="emoji">🕹️</span><h3>Game developer</h3><p>JavaScript or TypeScript. Godot or Phaser experience is a bonus. Movement, patrols, juice.</p></div>
+      <div class="card"><span class="emoji">🔊</span><h3>Sound and music</h3><p>Even one person with GarageBand and opinions about quacks.</p></div>
+      <div class="card"><span class="emoji">🗺️</span><h3>Levels and playtesting</h3><p>Make vineyard blocks, break the game, tell us what's fun.</p></div>
+    </div>
+    <p style="margin-top:22px"><strong>Why join?</strong> The core is already fun, so we won't spend the hackathon finding out whether the idea works; we'll spend it making the idea shine. The scope is small and the charm is big, so we can actually finish it. And: ducks.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p class="pixel" style="font-size:12px; color:var(--ink)">INTERESTED? MESSAGE MARTA 🍷</p>
+    <div class="ctas" style="justify-content:center">
+      <a class="btn primary" href="./">▶ Play the prototype</a>
+    </div>
+    <p style="margin-top:24px; font-size:14px">Snail Patrol is a working title. The ducks are real.</p>
+  </div>
+</footer>
+
+</body>
+</html>
